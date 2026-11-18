@@ -1,0 +1,117 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # tell-sama.sh with fake memory and browsers, plus a real reading.
+  bash:
+    name: bash (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./tests/test.sh
+
+  # Other Linux userlands: Debian's mawk, Fedora's gawk, Alpine's busybox.
+  linux-distros:
+    name: bash (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:stable-slim
+            setup: "true"
+          - image: fedora:latest
+            setup: "true"
+          - image: alpine:latest
+            setup: apk add --no-cache bash
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker run --rm -v "$PWD:/src:ro" -w /src "${{ matrix.image }}" sh -c '${{ matrix.setup }} && ./tests/test.sh'
+
+  # tell-sama.ps1 with fake Get-CimInstance and Start-Process. On Windows the
+  # last test also reads real memory; elsewhere it checks the script says to
+  # use tell-sama.sh.
+  powershell:
+    name: ${{ matrix.shell }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, shell: powershell }
+          - { os: windows-latest, shell: pwsh }
+          - { os: ubuntu-latest, shell: pwsh }
+          - { os: macos-latest, shell: pwsh }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Windows PowerShell 5.1
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: ./tests/test.ps1
+      - name: PowerShell 7
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: ./tests/test.ps1
+
+  # tell-sama.sh inside WSL on a real Windows machine: the full test suite,
+  # then a real run that has to get its numbers from Windows.
+  wsl:
+    name: bash (WSL on Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+      - name: Tests
+        run: ./tests/test.sh
+      - name: Real memory, read from Windows
+        run: |
+          out=$(./tell-sama.sh --dry-run 2>&1)
+          printf '%s\n' "$out"
+          if [[ $out == *"couldn't ask Windows"* ]]; then
+            echo "::error::fell back to /proc/meminfo instead of asking Windows"
+            exit 1
+          fi
+          if [[ $out != *"my PC has"* ]]; then
+            echo "::error::expected the message to say 'my PC has'"
+            exit 1
+          fi
+
+  # tell-sama.sh in Git Bash. The test suite's stub binaries don't work under
+  # MSYS, so this is a real run that has to get its numbers from Windows.
+  git-bash:
+    name: bash (Git Bash on Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Real memory, read from Windows
+        run: |
+          out=$(./tell-sama.sh --dry-run 2>&1)
+          printf '%s\n' "$out"
+          if [[ $out == *"couldn't ask Windows"* ]]; then
+            echo "::error::fell back to /proc/meminfo instead of asking Windows"
+            exit 1
+          fi
+          if [[ $out != *"my PC has"* ]]; then
+            echo "::error::expected the message to say 'my PC has'"
+            exit 1
+          fi
